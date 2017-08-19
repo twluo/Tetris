@@ -2,6 +2,7 @@ import pygame
 import sys
 import random
 from enum import Enum
+
 #block constants
 BLOCK_HEIGHT = 16
 BLOCK_WIDGTH = 16
@@ -9,6 +10,10 @@ BLOCK_WIDGTH = 16
 #grid constants
 GRID_WIDTH = 10
 GRID_HEIGHT = 20
+
+#gameplay constants
+GRAVITY_DELAY = 1000
+LOCK_DELAY = 1000
 
 class Movement(Enum):
     MOVE_LEFT = 0
@@ -76,34 +81,44 @@ class BasicTetromino(object):
         }
 
     def move(self, movement, grid):
-        self.moves[movement](grid)
+        return self.moves[movement](grid)
 
     def rotate_left(self, grid):
         rotation = (self.rotation - 1) % 4
         if self.check_collision(self.position, rotation, grid):
             self.rotation = rotation
+            return True
+        return False
 
     def rotate_right(self, grid):
         rotation = (self.rotation + 1) % 4
         if self.check_collision(self.position, rotation, grid):
             self.rotation = rotation
+            return True
+        return False
 
     def move_right(self, grid):
         position = (clamp(self.position[0] + 1, 0, 9), self.position[1])
         if self.check_collision(position, self.rotation, grid):
             self.position = position
+            return True
+        return False
 
 
     def move_left(self, grid):
         position = (clamp(self.position[0] - 1, 0, 9), self.position[1])
         if self.check_collision(position, self.rotation, grid):
             self.position = position
+            return True
+        return False
 
 
     def soft_drop(self, grid):
         position = self.position[0], self.position[1] + 1
         if self.check_collision(position, self.rotation, grid):
             self.position = position
+            return True
+        return False
 
     def hard_drop(self, grid):
         for y_position in range(self.position[1], 21):
@@ -112,6 +127,7 @@ class BasicTetromino(object):
             self.position = curr_position
             if not self.check_collision(next_position, self.rotation, grid):
                 break
+        return True
 
     def check_collision(self, position, rotation, grid):
         for x_offset, y_offset in self.configurations[rotation]:
@@ -199,6 +215,8 @@ class Grid(object):
         self.center = (255, 255)
         self.seven_bag = self.shuffle()
         self.active_tetromino = None
+        self.gravity_timer = 0
+        self.lock_timer = 0
 
     def shuffle(self):
         seven_bag = [k for k in Tetromino]
@@ -231,7 +249,21 @@ class Grid(object):
         if self.active_tetromino.is_game_over(self.grid):
             print("Game Over")
         self.seven_bag = self.seven_bag[1:]
+        self.gravity_timer = pygame.time.get_ticks()
+        self.lock_timer = pygame.time.get_ticks()
         self.update_grid()
+
+    def apply_gravity(self):
+        curr_time = pygame.time.get_ticks()
+        if curr_time - self.gravity_timer >= GRAVITY_DELAY:
+            self.move_active_tetromino(Movement.SOFT_DROP)
+            self.gravity_timer = curr_time
+
+    def apply_locking(self):
+        curr_time = pygame.time.get_ticks()
+        if curr_time - self.lock_timer >= LOCK_DELAY:
+            self.move_active_tetromino(Movement.HARD_DROP)
+            self.spawn_tetromino()
 
     def update_grid(self):
         for x_offset, y_offset in self.active_tetromino.configurations[self.active_tetromino.rotation]:
@@ -250,9 +282,12 @@ class Grid(object):
 
     def move_active_tetromino(self, movement):
         self.clear_active_tetromino()
-        self.active_tetromino.move(movement, self.grid)
+        has_it_moved = self.active_tetromino.move(movement, self.grid)
         self.update_grid()
         print(self.check_and_clear_lines())
+        if has_it_moved:
+            self.gravity_timer = pygame.time.get_ticks()
+            self.lock_timer = pygame.time.get_ticks()
 
     def check_and_clear_lines(self):
         counter = 0
@@ -295,6 +330,8 @@ class GameController(object):
             if event.key == pygame.K_SPACE:
                 self.grid.move_active_tetromino(Movement.HARD_DROP)
                 self.grid.spawn_tetromino()
+        self.grid.apply_gravity()
+        self.grid.apply_locking()
 
 
     def main(self):
