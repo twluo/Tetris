@@ -113,12 +113,11 @@ class BasicTetromino(object):
             if not self.check_collision(next_position, self.rotation, grid):
                 break
 
-
     def check_collision(self, position, rotation, grid):
         for x_offset, y_offset in self.configurations[rotation]:
             x = position[1] + y_offset
             y = position[0] + x_offset
-            if x <= 20 and y >= 0 and y <= 10:
+            if x < GRID_HEIGHT and y >= 0 and y < GRID_WIDTH:
                 if grid[x][y] is not 0 and x >= 0:
                     print("Collided", x, y)
                     return False
@@ -195,7 +194,7 @@ class ZTetromino(BasicTetromino):
 
 class Grid(object):
     def __init__(self):
-        self.grid = [[0 for x in range(11)] for x in range(21)]
+        self.grid = [[0 for x in range(GRID_WIDTH)] for x in range(GRID_HEIGHT)]
         self.size = (GRID_WIDTH * BLOCK_WIDGTH, GRID_HEIGHT * BLOCK_HEIGHT)
         self.center = (255, 255)
         self.seven_bag = self.shuffle()
@@ -238,7 +237,7 @@ class Grid(object):
         for x_offset, y_offset in self.active_tetromino.configurations[self.active_tetromino.rotation]:
             x = self.active_tetromino.position[1] + y_offset
             y = self.active_tetromino.position[0] + x_offset
-            if x >= 0 and x <= 20 and y >= 0 and y <= 10:
+            if x >= 0 and x <= GRID_HEIGHT and y >= 0 and y <= GRID_WIDTH:
                 self.grid[x][y] = self.active_tetromino.tetromino_id
         self.pretty_print()
 
@@ -246,17 +245,30 @@ class Grid(object):
         for x_offset, y_offset in self.active_tetromino.configurations[self.active_tetromino.rotation]:
             x = self.active_tetromino.position[1] + y_offset
             y = self.active_tetromino.position[0] + x_offset
-            if x >= 0 and x <= 20 and y >= 0 and y <= 10:
+            if x >= 0 and x <= GRID_HEIGHT and y >= 0 and y <= GRID_WIDTH:
                 self.grid[x][y] = 0
 
     def move_active_tetromino(self, movement):
         self.clear_active_tetromino()
         self.active_tetromino.move(movement, self.grid)
         self.update_grid()
+        print(self.check_and_clear_lines())
+
+    def check_and_clear_lines(self):
+        counter = 0
+        for row in self.grid:
+            for block in row:
+                if block is 0:
+                    break
+            else:
+                self.grid.remove(row)
+                self.grid.insert(0, [0 for x in range(GRID_WIDTH)])
+                counter += 1
+        return counter
 
     def draw(self, screen):
-        for x in range(11):
-            for y in range(21):
+        for x in range(GRID_WIDTH):
+            for y in range(GRID_HEIGHT):
                 if self.grid[y][x] is not 0:
                     block = Block(Tetromino(self.grid[y][x]))
                     origin_x = self.center[1] - (self.size[0] - BLOCK_HEIGHT * (2 * x + 1))/2
