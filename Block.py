@@ -18,10 +18,11 @@ BLOCK_HEIGHT = 16 * SCALING_FACTOR
 BLOCK_WIDTH = 16 * SCALING_FACTOR
 
 # GAME CONSTANTS
-GRID_WIDTH = 10
-GRID_HEIGHT = 40
-MAX_HEIGHT = 20
+GRID_WIDTH = 4
+GRID_HEIGHT = 8
+MAX_HEIGHT = 4
 STARTING_HEIGHT = GRID_HEIGHT - MAX_HEIGHT
+STARTING_WIDTH = int(GRID_WIDTH/2 - 1)
 CELL_NUM = GRID_WIDTH * GRID_HEIGHT
 TETROMINO_BOX_WIDTH = 5
 TETROMINO_BOX_HEIGHT = 5
@@ -29,16 +30,22 @@ TETROMINO_BOX_HEIGHT = 5
 # GAMEPLAY CONSTANTS
 GRAVITY_DELAY = 1000
 LOCK_DELAY = 1000
-DAS = 100
+DAS = 500
 ARR = 30
 NEXT_LENGTH = 5
+DAS_ENABLED = False
 
 # AI CONSTANTS
 RATE_OF_ACTION = 0
+COST_OF_MOVE = -0.01
+COST_OF_INVALID = -50
+COST_OF_LOSS = -100
+REWARD_SCALE = 2
+INPUT_SIZE = CELL_NUM + 1 + NEXT_LENGTH
 
 
 def check_bounds(x, y):
-    return 0 <= x <= GRID_HEIGHT and 0 <= y <= GRID_WIDTH
+    return 0 <= y <= GRID_HEIGHT and 0 <= x <= GRID_WIDTH
 
 
 def spawn_bag():
@@ -140,7 +147,7 @@ class BasicTetromino(object):
         self.tetromino_id = tetromino_id
         self.rotation = 0
         self.configurations = [[(0, 0) for x in range(TETROMINO_BOX_WIDTH) for x in range(TETROMINO_BOX_HEIGHT)]]
-        self.position = (4 - position_offset[0], STARTING_HEIGHT + position_offset[1])
+        self.position = (STARTING_WIDTH - position_offset[0], STARTING_HEIGHT + position_offset[1])
         self.moves = {
             Movement.MOVE_LEFT: self.move_left,
             Movement.MOVE_RIGHT: self.move_right,
@@ -338,6 +345,9 @@ class Grid(object):
         self.buffer = WINDOW_WIDTH/50
         self.grid = [[0 for x in range(GRID_WIDTH)] for x in range(GRID_HEIGHT)]
         self.gridBW = [[0 for x in range(GRID_WIDTH)] for x in range(GRID_HEIGHT)]
+        self.grid[GRID_HEIGHT-1][0] = self.grid[GRID_HEIGHT-1][1] = self.grid[GRID_HEIGHT-1][2] = 1
+        self.gridBW[GRID_HEIGHT-1][0] = self.gridBW[GRID_HEIGHT-1][1] = self.gridBW[GRID_HEIGHT-1][2] = 1
+
         self.grid_size = (GRID_WIDTH * BLOCK_WIDTH, MAX_HEIGHT * BLOCK_HEIGHT)
         self.grid_center = grid_center
         self.grid_top_left = (self.grid_center[0] - self.grid_size[0] / 2, self.grid_center[1] - self.grid_size[1] / 2)
@@ -364,24 +374,25 @@ class Grid(object):
         self.combo = 0
         self.startTime = pygame.time.get_ticks()
         self.counting_time = 0
+        self.max_combo = 0
 
     def pretty_print(self):
         for x in self.grid:
-            print(x.value) if x in Tetromino else print(x)
+            print(x.value) if x is Tetromino else print(x)
 
     def swap_tetromino(self):
         if self.hold_flag is True:
-            return self.gridBW, 0, self.game_over
+            return self.gridBW, COST_OF_MOVE, self.game_over
         self.hold_flag = True
         self.clear_active_tetromino()
         if self.hold_tetromino is None:
             self.hold_tetromino = get_tetromino(self.active_tetromino.tetromino_id)
             self.spawn_new_tetromino()
-            return self.gridBW, 0, self.game_over
+            return self.gridBW, COST_OF_MOVE, self.game_over
         new_tetromino = self.hold_tetromino.tetromino_id
         self.hold_tetromino = get_tetromino(self.active_tetromino.tetromino_id)
         self.spawn_tetromino(new_tetromino)
-        return self.gridBW, 0, self.game_over
+        return self.gridBW, COST_OF_MOVE, self.game_over
 
     def spawn_new_tetromino(self):
         self.spawn_tetromino(self.next_tetrominos.pop(0).tetromino_id)
@@ -396,7 +407,7 @@ class Grid(object):
         self.gravity_timer = pygame.time.get_ticks()
         self.lock_timer = pygame.time.get_ticks()
         if self.active_tetromino.is_game_over(self.grid):
-            print("Game Over")
+            # print("Game Over")
             self.game_over = True
         self.update_grid()
 
@@ -413,20 +424,19 @@ class Grid(object):
 
     def update_grid(self):
         for x_offset, y_offset in self.active_tetromino.configurations[self.active_tetromino.rotation]:
-            x = self.active_tetromino.position[1] + y_offset
-            y = self.active_tetromino.position[0] + x_offset
+            y = self.active_tetromino.position[1] + y_offset
+            x = self.active_tetromino.position[0] + x_offset
             if check_bounds(x, y):
-                self.grid[x][y] = self.active_tetromino.tetromino_id
-                self.gridBW[x][y] = 1
-        # self.pretty_print()
+                self.grid[y][x] = self.active_tetromino.tetromino_id
+                self.gridBW[y][x] = 1
 
     def clear_active_tetromino(self):
         for x_offset, y_offset in self.active_tetromino.configurations[self.active_tetromino.rotation]:
-            x = self.active_tetromino.position[1] + y_offset
-            y = self.active_tetromino.position[0] + x_offset
+            y = self.active_tetromino.position[1] + y_offset
+            x = self.active_tetromino.position[0] + x_offset
             if check_bounds(x, y):
-                self.grid[x][y] = 0
-                self.gridBW[x][y] = 0
+                self.grid[y][x] = 0
+                self.gridBW[y][x] = 0
 
     def move_active_tetromino(self, movement):
         if movement is Movement.HOLD:
@@ -434,12 +444,12 @@ class Grid(object):
         self.clear_active_tetromino()
         has_it_moved = self.active_tetromino.move(movement, self.grid)
         self.update_grid()
-        reward = -0.01
+        reward = COST_OF_MOVE
         if has_it_moved:
             self.gravity_timer = pygame.time.get_ticks()
             self.lock_timer = pygame.time.get_ticks()
         if movement is Movement.HARD_DROP:
-            reward = self.check_and_clear_lines() * 2
+            reward = self.check_and_clear_lines() * REWARD_SCALE * self.combo
             self.spawn_new_tetromino()
         return self.gridBW, reward, self.game_over
 
@@ -451,11 +461,21 @@ class Grid(object):
                     break
             else:
                 self.grid.remove(row)
-                self.grid.insert(STARTING_HEIGHT, [0 for x in range(GRID_WIDTH)])
+                self.grid.insert(0, [0 for x in range(GRID_WIDTH)])
                 counter += 1
         self.combo = 0 if counter is 0 else self.combo + counter
         self.score += counter
+        self.max_combo = max(self.combo, self.max_combo)
+        if counter is 0:
+            self.game_over = True
         return counter
+
+    def get_state(self):
+        flat_grid = flatten_grid(self.gridBW)
+        flat_grid = np.append(flat_grid,
+                              -1 if self.hold_tetromino is None else self.hold_tetromino.tetromino_id.value)
+        flat_grid = np.append(flat_grid, [x.tetromino_id.value for x in self.next_tetrominos])
+        return flat_grid
 
     def draw(self, screen, game_over):
 
@@ -515,7 +535,7 @@ class Grid(object):
 class AIController:
     def __init__(self, move_list):
         self.move_list = move_list
-        self.alpha = 0.1
+        self.alpha = 0.001
         self.gamma = 0.9
         self.epsilon = 0.5
         self.memory = collections.deque(maxlen=2500)
@@ -529,7 +549,8 @@ class AIController:
 
     def network(self):
         model = Sequential()
-        model.add(Dense(input_dim=CELL_NUM, output_dim=len(self.move_list), activation='softmax'))
+        model.add(Dense(input_dim=INPUT_SIZE, output_dim=INPUT_SIZE * 10, activation='relu'))
+        model.add(Dense(output_dim=len(self.move_list), activation='softmax'))
         opt = Adam(self.alpha)
         model.compile(loss='mse', optimizer=opt)
         return model
@@ -553,10 +574,10 @@ class AIController:
     def train_short_memory(self, state, action, reward, next_state, done):
         target = reward
         if not done:
-            target = reward + self.gamma * np.amax(self.model.predict(next_state.reshape((1, CELL_NUM)))[0])
-        target_f = self.model.predict(state.reshape((1, CELL_NUM)))
+            target = reward + self.gamma * np.amax(self.model.predict(next_state.reshape((1, INPUT_SIZE)))[0])
+        target_f = self.model.predict(state.reshape((1, INPUT_SIZE)))
         target_f[0][np.argmax(action)] = target
-        self.model.fit(state.reshape((1, CELL_NUM)), target_f, epochs=1, verbose=0)
+        self.model.fit(state.reshape((1, INPUT_SIZE)), target_f, epochs=1, verbose=0)
 
     def pick_a_move(self):
         random.shuffle(self.move_list)
@@ -566,10 +587,10 @@ class AIController:
 class GameController(object):
     def __init__(self, ai_controller):
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-        self.player = Grid("player", (WINDOW_WIDTH/4, WINDOW_HEIGHT/2))
+        self.player = Grid("player", (WINDOW_WIDTH/4, WINDOW_HEIGHT/4))
         self.player.spawn_new_tetromino()
         self.player.update_grid()
-        self.ai = Grid("ai", (3*WINDOW_WIDTH/4, WINDOW_HEIGHT/2))
+        self.ai = Grid("ai", (3*WINDOW_WIDTH/4, WINDOW_HEIGHT/4))
         self.ai.spawn_new_tetromino()
         self.ai.update_grid()
         self.move_left = False
@@ -586,6 +607,10 @@ class GameController(object):
         self.ai_controller = ai_controller
         self.game_count = 0
         self.startTime = pygame.time.get_ticks()
+        self.positive_reward = 0
+        self.player_max_combo = 0
+        self.ai_max_combo = 0
+        self.rotate_count = 0
 
     def exit(self):
         self.ai_controller.model.save_weights(self.ai_controller.weight_path)
@@ -594,7 +619,6 @@ class GameController(object):
 
     def handle_player_inputs(self):
         event = pygame.event.poll()
-        old_grid = flatten_grid(self.player.gridBW)
         if self.player.game_over:
             self.is_game_over = True, False
         if event.type == pygame.QUIT:
@@ -620,7 +644,7 @@ class GameController(object):
             if event.key == pygame.K_w:
                 self.player.move_active_tetromino(Movement.HARD_DROP)
             if event.key == pygame.K_r:
-                self.reset()
+                self.resetPlayer()
 
         keys = pygame.key.get_pressed()
         if event.type == pygame.KEYUP:
@@ -634,20 +658,23 @@ class GameController(object):
                     self.move_left = True
             if event.key == pygame.K_s:
                 self.move_down = False
+        if keys[pygame.K_q]:
+            self.exit()
 
-        if self.move_left:
-            curr_timer = pygame.time.get_ticks()
-            if curr_timer - self.move_left_das_timer > DAS:
-                if curr_timer - self.move_left_arr_timer > ARR:
-                    self.player.move_active_tetromino(Movement.MOVE_LEFT)
-                    self.move_left_arr_timer = curr_timer
+        if DAS_ENABLED:
+            if self.move_left:
+                curr_timer = pygame.time.get_ticks()
+                if curr_timer - self.move_left_das_timer > DAS:
+                    if curr_timer - self.move_left_arr_timer > ARR:
+                        self.player.move_active_tetromino(Movement.MOVE_LEFT)
+                        self.move_left_arr_timer = curr_timer
 
-        if self.move_right:
-            curr_timer = pygame.time.get_ticks()
-            if curr_timer - self.move_right_das_timer > DAS:
-                if curr_timer - self.move_right_arr_timer > ARR:
-                    self.player.move_active_tetromino(Movement.MOVE_RIGHT)
-                    self.move_right_arr_timer = curr_timer
+            if self.move_right:
+                curr_timer = pygame.time.get_ticks()
+                if curr_timer - self.move_right_das_timer > DAS:
+                    if curr_timer - self.move_right_arr_timer > ARR:
+                        self.player.move_active_tetromino(Movement.MOVE_RIGHT)
+                        self.move_right_arr_timer = curr_timer
 
         if self.move_down:
             curr_timer = pygame.time.get_ticks()
@@ -655,6 +682,7 @@ class GameController(object):
                 self.player.move_active_tetromino(Movement.SOFT_DROP)
                 self.move_right_arr_timer = curr_timer
 
+        self.player_max_combo = max(self.player_max_combo, self.player.max_combo)
         self.player.apply_gravity()
         self.player.apply_locking()
 
@@ -663,45 +691,72 @@ class GameController(object):
         if self.ai.game_over:
             self.is_game_over = False, True
         if curr_timer - self.ai_movement_timer > RATE_OF_ACTION:
-            old_grid = flatten_grid(self.ai.gridBW)
-            epsilon = 1 - (self.game_count * 1/500)
-            if randint(0, 10) < epsilon * 10:
+            old_grid = self.ai.get_state()
+            epsilon = 1 - (self.game_count * 1/1000)
+            prediction = self.ai_controller.model.predict(old_grid.reshape(1, INPUT_SIZE))
+            possible_ai_move = Movement(np.argmax(prediction[0]))
+            if randint(0, 100) < epsilon * 100:
                 ai_move = self.ai_controller.pick_a_move()
-                print("randomly picked " + str(ai_move))
+                # print("randomly picked " + str(ai_move))
             else:
-                prediction = self.ai_controller.model.predict(old_grid.reshape(1, CELL_NUM))
-                ai_move = Movement(np.argmax(prediction[0]))
-                print("intelligently picked " + str(ai_move))
+                # prediction = self.ai_controller.model.predict(old_grid.reshape(1, INPUT_SIZE))
+                ai_move = possible_ai_move
+                #print(prediction)
+                #print(np.argmax(prediction[0]))
+                ai_flag = True
+                if epsilon <= 0.1:
+                    print(ai_move)
+                # print("intelligently picked " + str(ai_move))
             new_grid, reward, is_game_over = self.ai.move_active_tetromino(ai_move)
-            new_grid_flat = flatten_grid(new_grid)
+            new_grid_flat = self.ai.get_state()
             if self.ai.game_over:
-                print("Lost better try again")
-                reward = -10
+                # print("Lost better try again")
+                reward = COST_OF_LOSS
+            if np.array_equal(old_grid, new_grid_flat):
+                # print("Inefficient move")
+                reward = COST_OF_INVALID
+            #print(ai_move)
+            if ai_move is Movement.ROTATE_RIGHT or ai_move is Movement.ROTATE_LEFT:
+                self.rotate_count += 1
+            elif ai_move is Movement.HARD_DROP or reward > 0:
+                self.rotate_count = 0
+            if self.rotate_count >= 4:
+                reward = COST_OF_INVALID
             self.ai_controller.train_short_memory(old_grid, ai_move, reward, new_grid_flat, is_game_over)
             self.ai_controller.remember(old_grid, ai_move, reward, new_grid_flat, is_game_over)
+            print(reward, possible_ai_move, ai_move)
+            if reward > 0:
+                self.positive_reward += reward
             self.ai_movement_timer = curr_timer
+
+        self.ai_max_combo = max(self.ai_max_combo, self.ai.max_combo)
         self.ai.apply_gravity()
         self.ai.apply_locking()
 
     def handle_game_over(self):
         if self.ai.game_over:
             self.game_count += 1
-            self.reset()
-            print("Next Game: " + str(self.game_count))
-        event = pygame.event.poll()
-        if event.type == pygame.QUIT:
-            self.exit()
-        if event.type == pygame.KEYDOWN:
-            self.reset()
+            self.resetAI()
+            # print("Next Game: " + str(self.game_count))
+        if self.player.game_over:
+            self.resetPlayer()
+            event = pygame.event.poll()
+            if event.type == pygame.QUIT:
+                self.exit()
+            if event.type == pygame.KEYDOWN:
+                self.resetPlayer()
 
-    def reset(self):
-        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-        self.player = Grid("player", (WINDOW_WIDTH/4, WINDOW_HEIGHT/2))
-        self.player.spawn_new_tetromino()
-        self.player.update_grid()
-        self.ai = Grid("ai", (3*WINDOW_WIDTH/4, WINDOW_HEIGHT/2))
+    def resetAI(self):
+        self.ai = Grid("ai", (3*WINDOW_WIDTH/4, WINDOW_HEIGHT/4))
         self.ai.spawn_new_tetromino()
         self.ai.update_grid()
+        self.is_game_over = False, False
+
+    def resetPlayer(self):
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        self.player = Grid("player", (WINDOW_WIDTH/4, WINDOW_HEIGHT/4))
+        self.player.spawn_new_tetromino()
+        self.player.update_grid()
         self.move_left = False
         self.move_right = False
         self.move_down = False
@@ -712,7 +767,6 @@ class GameController(object):
         self.move_right_arr_timer = pygame.time.get_ticks()
         self.move_down_arr_timer = pygame.time.get_ticks()
         self.ai_movement_timer = pygame.time.get_ticks()
-        self.is_game_over = False, False
 
     def draw(self, game_over):
         self.screen.fill((0, 0, 0))
@@ -720,17 +774,29 @@ class GameController(object):
         self.ai.draw(self.screen, game_over)
         font = pygame.font.SysFont("comicsansms", 20)
         text = font.render("Game: " + str(self.game_count), True, (0, 128, 0))
-        self.screen.blit(text,(400, 500))
-        font = pygame.font.SysFont("comicsansms", 20)
+        self.screen.blit(text, (1000, 500))
         counting_time = pygame.time.get_ticks() - self.startTime
         counting_minutes = str(int(counting_time / 60000)).zfill(2)
         counting_seconds = str(int((counting_time % 60000) / 1000)).zfill(2)
         counting_millisecond = str(int(counting_time % 1000)).zfill(3)
         counting_string = "%s:%s:%s" % (counting_minutes, counting_seconds, counting_millisecond)
         text = font.render("Timer: " + counting_string, True, (0, 128, 0))
-        self.screen.blit(text,(400, 520))
+        self.screen.blit(text, (1000, 520))
+        text = font.render("Player MAX: " + str(self.player_max_combo) + " AI MAX: " + str(self.ai_max_combo), True, (0, 128, 0))
+        self.screen.blit(text, (1000, 540))
+
         pygame.display.update()
 
+    def print_status(self):
+        counting_time = pygame.time.get_ticks() - self.startTime
+        counting_minutes = str(int(counting_time / 60000)).zfill(2)
+        counting_seconds = str(int((counting_time % 60000) / 1000)).zfill(2)
+        counting_millisecond = str(int(counting_time % 1000)).zfill(3)
+        counting_string = "%s:%s:%s" % (counting_minutes, counting_seconds, counting_millisecond)
+        sys.stdout.write("\r Game count %i. Max Combo: %i. Reward progress: %i. Time passed: %s " % (self.game_count, self.ai_max_combo, self.positive_reward, counting_string))
+        sys.stdout.flush()
+        if self.game_count % 1000 is 0:
+            self.ai_controller.model.save_weights(self.ai_controller.weight_path)
 
 if __name__ == '__main__':
     game_controller = GameController(AIController(list_moves()))
@@ -738,9 +804,8 @@ if __name__ == '__main__':
 
     while True:
         game_over = game_controller.is_game_over[0] or game_controller.is_game_over[1]
-        if not game_over:
-            game_controller.handle_player_inputs()
-            game_controller.handle_ai_inputs()
-        else:
-            game_controller.handle_game_over()
+        game_controller.handle_player_inputs()
+        game_controller.handle_ai_inputs()
+        game_controller.handle_game_over()
         game_controller.draw(game_over)
+        #game_controller.print_status()
