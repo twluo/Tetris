@@ -414,13 +414,15 @@ class Grid(object):
     def apply_gravity(self):
         curr_time = pygame.time.get_ticks()
         if curr_time - self.gravity_timer >= GRAVITY_DELAY:
-            self.move_active_tetromino(Movement.SOFT_DROP)
             self.gravity_timer = curr_time
+            return True, (self.move_active_tetromino(Movement.SOFT_DROP))
+        return False, None
 
     def apply_locking(self):
         curr_time = pygame.time.get_ticks()
         if curr_time - self.lock_timer >= LOCK_DELAY:
-            self.move_active_tetromino(Movement.HARD_DROP)
+            return True, (self.move_active_tetromino(Movement.HARD_DROP))
+        return False, None
 
     def update_grid(self):
         for x_offset, y_offset in self.active_tetromino.configurations[self.active_tetromino.rotation]:
@@ -611,6 +613,7 @@ class GameController(object):
         self.player_max_combo = 0
         self.ai_max_combo = 0
         self.rotate_count = 0
+        self.total_lines = 0
 
     def exit(self):
         self.ai_controller.model.save_weights(self.ai_controller.weight_path)
@@ -687,12 +690,15 @@ class GameController(object):
         self.player.apply_locking()
 
     def handle_ai_inputs(self):
+        reward = 0
+        possible_ai_move = "None"
+        ai_move = "None"
         curr_timer = pygame.time.get_ticks()
         if self.ai.game_over:
             self.is_game_over = False, True
         if curr_timer - self.ai_movement_timer > RATE_OF_ACTION:
             old_grid = self.ai.get_state()
-            epsilon = 1 - (self.game_count * 1/1000)
+            epsilon = 1 - (self.game_count * 1/5000)
             prediction = self.ai_controller.model.predict(old_grid.reshape(1, INPUT_SIZE))
             possible_ai_move = Movement(np.argmax(prediction[0]))
             if randint(0, 100) < epsilon * 100:
@@ -703,9 +709,6 @@ class GameController(object):
                 ai_move = possible_ai_move
                 #print(prediction)
                 #print(np.argmax(prediction[0]))
-                ai_flag = True
-                if epsilon <= 0.1:
-                    print(ai_move)
                 # print("intelligently picked " + str(ai_move))
             new_grid, reward, is_game_over = self.ai.move_active_tetromino(ai_move)
             new_grid_flat = self.ai.get_state()
@@ -724,18 +727,31 @@ class GameController(object):
                 reward = COST_OF_INVALID
             self.ai_controller.train_short_memory(old_grid, ai_move, reward, new_grid_flat, is_game_over)
             self.ai_controller.remember(old_grid, ai_move, reward, new_grid_flat, is_game_over)
-            print(reward, possible_ai_move, ai_move)
             if reward > 0:
                 self.positive_reward += reward
             self.ai_movement_timer = curr_timer
 
         self.ai_max_combo = max(self.ai_max_combo, self.ai.max_combo)
-        self.ai.apply_gravity()
-        self.ai.apply_locking()
+        gravity, auto_move = self.ai.apply_gravity()
+
+        if gravity:
+            _, reward, is_game_over = auto_move
+            new_grid_flat = self.ai.get_state()
+            self.ai_controller.train_short_memory(old_grid, ai_move, reward, new_grid_flat, is_game_over)
+            self.ai_controller.remember(old_grid, ai_move, reward, new_grid_flat, is_game_over)
+        locking, auto_move = self.ai.apply_locking()
+        if locking:
+            _, reward, is_game_over = auto_move
+            new_grid_flat = self.ai.get_state()
+            self.ai_controller.train_short_memory(old_grid, ai_move, reward, new_grid_flat, is_game_over)
+            self.ai_controller.remember(old_grid, ai_move, reward, new_grid_flat, is_game_over)
+            self.rotate_count = 0
+        return reward, possible_ai_move, ai_move
 
     def handle_game_over(self):
         if self.ai.game_over:
             self.game_count += 1
+            self.total_lines += self.ai.score
             self.resetAI()
             # print("Next Game: " + str(self.game_count))
         if self.player.game_over:
@@ -787,13 +803,13 @@ class GameController(object):
 
         pygame.display.update()
 
-    def print_status(self):
+    def print_status(self, reward, possible, actual):
         counting_time = pygame.time.get_ticks() - self.startTime
         counting_minutes = str(int(counting_time / 60000)).zfill(2)
         counting_seconds = str(int((counting_time % 60000) / 1000)).zfill(2)
         counting_millisecond = str(int(counting_time % 1000)).zfill(3)
         counting_string = "%s:%s:%s" % (counting_minutes, counting_seconds, counting_millisecond)
-        sys.stdout.write("\r Game count %i. Max Combo: %i. Reward progress: %i. Time passed: %s " % (self.game_count, self.ai_max_combo, self.positive_reward, counting_string))
+        sys.stdout.write("\r Game count %i. Max Combo: %i. Total Lines: %i. Reward progress: %i. Time passed: %s Reward: %f. Possible: %s. Actual: %s" % (self.game_count, self.ai_max_combo, self.total_lines, self.positive_reward, counting_string, reward, possible, actual))
         sys.stdout.flush()
         if self.game_count % 1000 is 0:
             self.ai_controller.model.save_weights(self.ai_controller.weight_path)
@@ -805,7 +821,7 @@ if __name__ == '__main__':
     while True:
         game_over = game_controller.is_game_over[0] or game_controller.is_game_over[1]
         game_controller.handle_player_inputs()
-        game_controller.handle_ai_inputs()
+        reward, possible, actual = game_controller.handle_ai_inputs()
         game_controller.handle_game_over()
-        game_controller.draw(game_over)
-        #game_controller.print_status()
+        #game_controller.draw(game_over)
+        game_controller.print_status(reward, possible, actual)
